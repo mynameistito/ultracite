@@ -1,0 +1,23 @@
+.github/workflows/validate.yml
+  605670ddba060822 98-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "956331be11fd2ccb311f0e6dfb5cb28e0f79656f",
+  "prompts": {
+    "605670ddba060822": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3029db44-47b0-4506-9faa-8a29a43a9704",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tito",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 0,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
