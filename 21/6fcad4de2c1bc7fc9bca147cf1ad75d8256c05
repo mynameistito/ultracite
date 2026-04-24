@@ -1,0 +1,27 @@
+packages/cli/__tests__/biome.test.ts
+  c7df45da013c98da 301-337
+packages/cli/src/linters/biome.ts
+  c7df45da013c98da 67-70
+.changeset/fix-legacy-biome-core-extends.md
+  c7df45da013c98da 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "216fcad4de2c1bc7fc9bca147cf1ad75d8256c05",
+  "prompts": {
+    "c7df45da013c98da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3d53e77-7a63-4c44-a045-8457835efa64",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tito",
+      "messages": [],
+      "total_additions": 46,
+      "total_deletions": 1,
+      "accepted_lines": 46,
+      "overriden_lines": 0
+    }
+  }
+}
