@@ -1,0 +1,25 @@
+packages/cli/config/shared/ignores.mjs
+  66365f72ee513963 66
+packages/cli/config/biome/core/biome.jsonc
+  66365f72ee513963 57-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7573f5e3e98b8a344f024eba8071a9f72f72b981",
+  "prompts": {
+    "66365f72ee513963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7803473e-6bf3-4b4c-9a14-8f84d805423f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tito",
+      "messages": [],
+      "total_additions": 743,
+      "total_deletions": 1,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
