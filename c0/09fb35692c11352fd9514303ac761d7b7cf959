@@ -1,0 +1,25 @@
+.changeset/cli-short-version-flag.md
+  66365f72ee513963 1-5
+packages/cli/src/index.ts
+  66365f72ee513963 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c009fb35692c11352fd9514303ac761d7b7cf959",
+  "prompts": {
+    "66365f72ee513963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7803473e-6bf3-4b4c-9a14-8f84d805423f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Tito",
+      "messages": [],
+      "total_additions": 781,
+      "total_deletions": 776,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
