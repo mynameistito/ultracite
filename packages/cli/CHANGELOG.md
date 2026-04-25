@@ -1,3 +1,9 @@
+## 7.6.2
+
+### Patch Changes
+
+- 8ff1b96: Fix `update` command not migrating legacy `ultracite/<name>` extends entries to `ultracite/biome/<name>` (e.g. `ultracite/core`, `ultracite/react`, `ultracite/type-aware`, etc.).
+
 ## 7.6.1
 
 ### Patch Changes
