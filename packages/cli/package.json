@@ -30,6 +30,10 @@
   ],
   "type": "module",
   "exports": {
+    "./config": {
+      "types": "./config/config.d.mts",
+      "default": "./config/config.mjs"
+    },
     "./biome/*": "./config/biome/*/biome.jsonc",
     "./eslint/*": "./config/eslint/*/eslint.config.mjs",
     "./oxlint/*": {
