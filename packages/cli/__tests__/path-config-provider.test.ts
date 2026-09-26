@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 import { supportsNativeNodeTypeScriptConfig } from "../src/path-config-adapters";
 
@@ -9,6 +10,9 @@ const nativeOxlintFixture = path.join(fixture, "native-oxlint");
 const cliRoot = path.resolve(import.meta.dir, "..");
 const cliEntry = path.join(cliRoot, "src", "path-config.ts");
 const adapterEntry = path.join(cliRoot, "src", "path-config-adapters.ts");
+const jitiRegister = pathToFileURL(
+  path.join(cliRoot, "node_modules", "jiti", "lib", "jiti-register.mjs")
+).href;
 const biomeBin = path.join(
   cliRoot,
   "node_modules",
@@ -109,7 +113,7 @@ describe("path-scoped provider configs", () => {
       [
         process.execPath,
         "-e",
-        `import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"; import { spawnSync } from "node:child_process"; import path from "node:path"; const root = process.cwd(); const files = [path.join(root, "apps/web/package.json"), path.join(root, ".oxlintrc.json"), path.join(root, "apps/web/src/clean.ts"), path.join(root, "packages/shared/src/clean.ts"), path.join(root, ".ultracite-oxlint.config.mjs")]; const originals = new Map(files.map((file) => [file, existsSync(file) ? readFileSync(file) : undefined])); try { const [manifest, nativeConfig, webFile, sharedFile] = files; writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); writeFileSync(manifest, "{}\\n"); writeFileSync(webFile, "export const clean = 1;\\n"); writeFileSync(sharedFile, "export const clean = 1;\\n"); const cli = ${JSON.stringify(path.join(cliRoot, "src", "index.ts"))}; const env = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, "--experimental-strip-types"].filter(Boolean).join(" "), PATH: ${JSON.stringify(path.join(cliRoot, "node_modules", ".bin"))} + path.delimiter + process.env.PATH }; const check = spawnSync(process.execPath, [cli, "check", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); const fix = spawnSync(process.execPath, [cli, "fix", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); console.log(JSON.stringify({ checkStatus: check.status, checkOutput: check.stdout + check.stderr, fixStatus: fix.status, fixOutput: fix.stdout + fix.stderr })); } finally { for (const [file, contents] of originals) { if (contents === undefined) rmSync(file, { force: true }); else writeFileSync(file, contents); } }`,
+        `import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"; import { spawnSync } from "node:child_process"; import path from "node:path"; const root = process.cwd(); const files = [path.join(root, "apps/web/package.json"), path.join(root, ".oxlintrc.json"), path.join(root, "apps/web/src/clean.ts"), path.join(root, "packages/shared/src/clean.ts"), path.join(root, ".ultracite-oxlint.config.mjs")]; const originals = new Map(files.map((file) => [file, existsSync(file) ? readFileSync(file) : undefined])); try { const [manifest, nativeConfig, webFile, sharedFile] = files; writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); writeFileSync(manifest, "{}\\n"); writeFileSync(webFile, "export const clean = 1;\\n"); writeFileSync(sharedFile, "export const clean = 1;\\n"); const cli = ${JSON.stringify(path.join(cliRoot, "src", "index.ts"))}; const env = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import=${jitiRegister}"].filter(Boolean).join(" "), PATH: ${JSON.stringify(path.join(cliRoot, "node_modules", ".bin"))} + path.delimiter + process.env.PATH }; const check = spawnSync(process.execPath, [cli, "check", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); const fix = spawnSync(process.execPath, [cli, "fix", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); console.log(JSON.stringify({ checkStatus: check.status, checkOutput: check.stdout + check.stderr, fixStatus: fix.status, fixOutput: fix.stdout + fix.stderr })); } finally { for (const [file, contents] of originals) { if (contents === undefined) rmSync(file, { force: true }); else writeFileSync(file, contents); } }`,
       ],
       { cwd: fixture }
     );
