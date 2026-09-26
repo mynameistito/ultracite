@@ -14,6 +14,7 @@ import {
 import { toolchainPeerRanges } from "../dependencies";
 import type { ToolchainPackageName } from "../dependencies";
 import { findPathConfigFiles, resolvePathConfig } from "../path-config";
+import { assertPathConfigPresetsAvailable } from "../path-config-adapters";
 import { readPackageJsonSync } from "../schemas";
 import { spawnSync } from "../spawn-sync";
 import {
@@ -553,13 +554,17 @@ const getChecksForLinter = (linter: Linter): CheckEntry[] => {
 /** Validate DSL files before check/fix needs to materialize a provider config. */
 export const validatePathConfigs = async (
   root = process.cwd(),
-  configFiles = findPathConfigFiles(root)
+  configFiles = findPathConfigFiles(root),
+  linter?: Linter
 ): Promise<DiagnosticCheck | null> => {
   if (configFiles.length === 0) {
     return null;
   }
   try {
     const config = await resolvePathConfig(root, configFiles);
+    if (config && linter) {
+      assertPathConfigPresetsAvailable(linter, config);
+    }
     return {
       message: `Validated ${configFiles.length} path-scoped Ultracite config${configFiles.length === 1 ? "" : "s"}${config ? ` across ${config.scopes.length} preset scopes` : ""}`,
       name: "Path-scoped Ultracite configuration",
@@ -671,7 +676,7 @@ export const doctor = (): void | Promise<void> => {
   const checks = runDiagnostics(linter);
   const pathConfigFiles = findPathConfigFiles(process.cwd());
   if (pathConfigFiles.length > 0) {
-    return validatePathConfigs(process.cwd(), pathConfigFiles).then(
+    return validatePathConfigs(process.cwd(), pathConfigFiles, linter).then(
       (pathConfigCheck) => {
         if (pathConfigCheck) {
           checks.push(pathConfigCheck);

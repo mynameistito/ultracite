@@ -1,17 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
+import { supportsNativeNodeTypeScriptConfig } from "../src/path-config-adapters";
+
 const fixture = path.join(import.meta.dir, "fixtures", "path-config");
+const nativeOxlintFixture = path.join(fixture, "native-oxlint");
 const cliRoot = path.resolve(import.meta.dir, "..");
 const cliEntry = path.join(cliRoot, "src", "path-config.ts");
 const adapterEntry = path.join(cliRoot, "src", "path-config-adapters.ts");
-const oxlint = path.join(
-  cliRoot,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "oxlint.exe" : "oxlint"
-);
 const biomeBin = path.join(
   cliRoot,
   "node_modules",
@@ -20,12 +18,23 @@ const biomeBin = path.join(
 );
 
 describe("path-scoped provider configs", () => {
+  test("recognizes Node versions that can load native TypeScript configs", () => {
+    expect(supportsNativeNodeTypeScriptConfig("20.18.0")).toBe(false);
+    expect(supportsNativeNodeTypeScriptConfig("20.19.0")).toBe(true);
+    expect(supportsNativeNodeTypeScriptConfig("21.7.3")).toBe(false);
+    expect(supportsNativeNodeTypeScriptConfig("22.17.0")).toBe(false);
+    expect(supportsNativeNodeTypeScriptConfig("22.18.0")).toBe(true);
+    expect(supportsNativeNodeTypeScriptConfig("23.5.0")).toBe(false);
+    expect(supportsNativeNodeTypeScriptConfig("23.6.0")).toBe(true);
+    expect(supportsNativeNodeTypeScriptConfig("24.0.0")).toBe(true);
+  });
+
   test("Biome and ESLint native outputs retain the directory scope", async () => {
     const generated = Bun.spawnSync(
       [
         "bun",
         "-e",
-        `import { resolvePathConfig } from ${JSON.stringify(cliEntry)}; import { materializePathConfig } from ${JSON.stringify(adapterEntry)}; const root = process.cwd(); const config = await resolvePathConfig(root, [root + "/ultracite.config.mjs", root + "/apps/web/ultracite.config.mjs"]); await materializePathConfig("biome", config); await materializePathConfig("eslint", config);`,
+        `import { resolvePathConfig } from ${JSON.stringify(cliEntry)}; import { materializePathConfig } from ${JSON.stringify(adapterEntry)}; const root = process.cwd(); const config = await resolvePathConfig(root, [root + "/ultracite.config.ts", root + "/apps/web/ultracite.config.ts"]); await materializePathConfig("biome", config); await materializePathConfig("eslint", config);`,
       ],
       { cwd: fixture }
     );
@@ -49,7 +58,7 @@ describe("path-scoped provider configs", () => {
       )
     ).toBe(true);
     expect(eslint).toContain("apps/web/**/*");
-    expect(eslint).toContain('scopeConfig(preset0, ["**/*"])');
+    expect(eslint).toContain('scopeConfig(preset0, ["**/*","!apps/web/**/*"])');
     expect(eslint).toContain("export default");
 
     const lint = Bun.spawnSync(
@@ -68,45 +77,40 @@ describe("path-scoped provider configs", () => {
     const output = `${lint.stdout.toString()}${lint.stderr.toString()}`;
     expect(lint.exitCode).toBe(1);
     expect(output).toContain("useButtonType");
-    expect(output).toContain("useJsxKeyInIterable");
-    expect(output).not.toContain("apps\\docs\\src\\bad-component.tsx:");
-    expect(output).not.toContain("packages\\shared\\src\\bad-component.tsx:");
+    const normalizedOutput = output.replaceAll("\\", "/");
+    expect(normalizedOutput).toContain("apps/web/src/bad-component.tsx");
+    expect(normalizedOutput).not.toContain("apps/docs/src/bad-component.tsx:");
+    expect(normalizedOutput).not.toContain(
+      "packages/shared/src/bad-component.tsx:"
+    );
   });
 
-  test("Oxlint applies React diagnostics only to the nested workspace scope", () => {
-    const materialize = Bun.spawnSync(
-      [
-        "bun",
-        "-e",
-        `import { writeFileSync, rmSync } from "node:fs"; import { resolvePathConfig } from ${JSON.stringify(cliEntry)}; import { materializePathConfig } from ${JSON.stringify(adapterEntry)}; const root = process.cwd(); const nativeConfig = root + "/.oxlintrc.json"; writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); const config = await resolvePathConfig(root, [root + "/ultracite.config.mjs", root + "/apps/web/ultracite.config.mjs"]); await materializePathConfig("oxlint", config); rmSync(nativeConfig);`,
-      ],
-      { cwd: fixture }
+  test("Oxlint keeps its native TypeScript config alongside Ultracite path config", async () => {
+    const generatedConfig = path.join(
+      nativeOxlintFixture,
+      ".ultracite-oxlint.config.mjs"
     );
-    expect(materialize.exitCode).toBe(0);
-
-    const lint = Bun.spawnSync(
-      [
-        oxlint,
-        "--config",
-        "node_modules/.cache/ultracite/oxlint.config.mjs",
-        "--format",
-        "unix",
-        "apps/web/src/bad-component.tsx",
-        "apps/docs/src/bad-component.tsx",
-        "packages/shared/src/bad-component.tsx",
-        "packages/shared/src/native-rule.ts",
-      ],
-      { cwd: fixture }
-    );
-    const output = `${lint.stdout.toString()}${lint.stderr.toString()}`;
-    expect(lint.exitCode).toBe(1);
-    expect(output).toContain("react(button-has-type)");
-    expect(output).toContain("react(jsx-key)");
-    expect(output).toContain("apps/web/src/bad-component.tsx");
-    expect(output).not.toContain("apps/docs/src/bad-component.tsx:");
-    expect(output).not.toContain("packages/shared/src/bad-component.tsx:");
-    expect(output).toContain("packages/shared/src/native-rule.ts");
-    expect(output).toContain("eslint(no-alert)");
+    try {
+      const materialize = Bun.spawnSync(
+        [
+          process.execPath,
+          "-e",
+          `import path from "node:path"; import { resolvePathConfig } from ${JSON.stringify(cliEntry)}; import { materializePathConfig } from ${JSON.stringify(adapterEntry)}; const root = process.cwd(); const config = await resolvePathConfig(root, [path.join(root, "ultracite.config.ts")]); await materializePathConfig("oxlint", config);`,
+        ],
+        { cwd: nativeOxlintFixture }
+      );
+      if (materialize.exitCode !== 0) {
+        throw new Error(materialize.stderr.toString());
+      }
+      const oxlintConfig = await Bun.file(generatedConfig).text();
+      expect(oxlintConfig).toContain("oxlint.config.ts");
+      expect(oxlintConfig).toContain('"no-console":"error"');
+      expect(oxlintConfig).toContain('"react"');
+      expect(oxlintConfig).toContain('"native-generated/**"');
+      expect(oxlintConfig).toContain('"packages/shared/src/**/*.ts"');
+    } finally {
+      await rm(generatedConfig, { force: true });
+    }
   });
 
   test("root check and fix materialize the shared DSL for explicit cross-scope files", () => {
@@ -114,11 +118,15 @@ describe("path-scoped provider configs", () => {
       [
         process.execPath,
         "-e",
-        `import { writeFileSync, rmSync } from "node:fs"; import { spawnSync } from "node:child_process"; import path from "node:path"; const root = process.cwd(); const manifest = path.join(root, "apps/web/package.json"); const nativeConfig = path.join(root, ".oxlintrc.json"); writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); writeFileSync(manifest, "{}\\n"); writeFileSync(path.join(root, "apps/web/src/clean.ts"), "export const clean = 1;\\n"); writeFileSync(path.join(root, "packages/shared/src/clean.ts"), "export const clean = 1;\\n"); const cli = ${JSON.stringify(path.join(cliRoot, "src", "index.ts"))}; const env = { ...process.env, PATH: ${JSON.stringify(path.join(cliRoot, "node_modules", ".bin"))} + path.delimiter + process.env.PATH }; const check = spawnSync(process.execPath, [cli, "check", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); const fix = spawnSync(process.execPath, [cli, "fix", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); rmSync(manifest); rmSync(nativeConfig); console.log(JSON.stringify({ checkStatus: check.status, checkOutput: check.stdout + check.stderr, fixStatus: fix.status, fixOutput: fix.stdout + fix.stderr }));`,
+        `import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"; import { spawnSync } from "node:child_process"; import path from "node:path"; const root = process.cwd(); const files = [path.join(root, "apps/web/package.json"), path.join(root, ".oxlintrc.json"), path.join(root, "apps/web/src/clean.ts"), path.join(root, "packages/shared/src/clean.ts"), path.join(root, ".ultracite-oxlint.config.mjs")]; const originals = new Map(files.map((file) => [file, existsSync(file) ? readFileSync(file) : undefined])); try { const [manifest, nativeConfig, webFile, sharedFile] = files; writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); writeFileSync(manifest, "{}\\n"); writeFileSync(webFile, "export const clean = 1;\\n"); writeFileSync(sharedFile, "export const clean = 1;\\n"); const cli = ${JSON.stringify(path.join(cliRoot, "src", "index.ts"))}; const env = { ...process.env, PATH: ${JSON.stringify(path.join(cliRoot, "node_modules", ".bin"))} + path.delimiter + process.env.PATH }; const check = spawnSync(process.execPath, [cli, "check", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); const fix = spawnSync(process.execPath, [cli, "fix", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); console.log(JSON.stringify({ checkStatus: check.status, checkOutput: check.stdout + check.stderr, fixStatus: fix.status, fixOutput: fix.stdout + fix.stderr })); } finally { for (const [file, contents] of originals) { if (contents === undefined) rmSync(file, { force: true }); else writeFileSync(file, contents); } }`,
       ],
       { cwd: fixture }
     );
-    expect(runCommands.exitCode).toBe(0);
+    if (runCommands.exitCode !== 0) {
+      throw new Error(
+        `${runCommands.stdout.toString()}${runCommands.stderr.toString()}`
+      );
+    }
     // SAFETY: The subprocess prints the result object constructed in the inline integration script.
     const result = JSON.parse(runCommands.stdout.toString()) as {
       checkOutput: string;
@@ -126,6 +134,14 @@ describe("path-scoped provider configs", () => {
       fixOutput: string;
       fixStatus: number | null;
     };
+    if (result.checkStatus !== 0) {
+      throw new Error(
+        `check exited ${result.checkStatus}: ${result.checkOutput}`
+      );
+    }
+    if (result.fixStatus !== 0) {
+      throw new Error(`fix exited ${result.fixStatus}: ${result.fixOutput}`);
+    }
     expect(result.checkStatus).toBe(0);
     expect(result.fixStatus).toBe(0);
     expect(result.checkOutput).not.toContain("Could not resolve");

@@ -1,8 +1,9 @@
 import { readdirSync } from "node:fs";
-import { readdir as readdirAsync } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { findWorkspaces } from "find-workspaces";
+import { createJiti } from "jiti";
 import { z } from "zod";
 
 import { UltraciteSetupError } from "./config-resolution";
@@ -22,6 +23,7 @@ export type UltraciteConfig = z.infer<typeof configSchema>;
 
 export interface PresetScope {
   directory: string;
+  excludedDirectories?: string[];
   files: string[];
   presets: string[];
 }
@@ -32,7 +34,7 @@ export interface ResolvedPathConfig {
   scopes: PresetScope[];
 }
 
-const configFileName = "ultracite.config.mjs";
+const configFileName = "ultracite.config.ts";
 const supportedPresets = new Set([
   "core",
   ...frameworks,
@@ -43,34 +45,48 @@ const supportedPresets = new Set([
   "tanstack/js-plugins",
   "type-aware",
 ]);
-const discoverySafetyExclusions = new Set([".git", "node_modules"]);
-
 const toPosix = (value: string): string => value.split(path.sep).join("/");
 
-const globToRegExp = (glob: string): RegExp => {
-  if (!glob || path.isAbsolute(glob) || glob.split(/[\\/]/u).includes("..")) {
-    throw new UltraciteSetupError(
-      `Invalid Ultracite config glob "${glob}". Use a non-empty project-relative pattern without "..".`
-    );
-  }
-  let pattern = "^";
+const globFragment = (glob: string): string => {
+  let pattern = "";
   for (let index = 0; index < glob.length; index += 1) {
     const char = glob[index];
     if (char === "{") {
-      const end = glob.indexOf("}", index + 1);
-      if (end === -1 || !glob.slice(index + 1, end).includes(",")) {
+      let depth = 1;
+      let end = index + 1;
+      for (; end < glob.length && depth > 0; end += 1) {
+        if (glob[end] === "{") {
+          depth += 1;
+        } else if (glob[end] === "}") {
+          depth -= 1;
+        }
+      }
+      if (depth !== 0) {
+        throw new UltraciteSetupError(
+          `Invalid Ultracite config glob "${glob}".`
+        );
+      }
+      const alternatives: string[] = [];
+      let alternativeStart = index + 1;
+      let nestedDepth = 0;
+      for (let cursor = index + 1; cursor < end - 1; cursor += 1) {
+        if (glob[cursor] === "{") {
+          nestedDepth += 1;
+        } else if (glob[cursor] === "}") {
+          nestedDepth -= 1;
+        } else if (glob[cursor] === "," && nestedDepth === 0) {
+          alternatives.push(glob.slice(alternativeStart, cursor));
+          alternativeStart = cursor + 1;
+        }
+      }
+      alternatives.push(glob.slice(alternativeStart, end - 1));
+      if (alternatives.length < 2 || alternatives.some((item) => !item)) {
         throw new UltraciteSetupError(
           `Invalid Ultracite config glob "${glob}". Brace groups must contain comma-separated alternatives.`
         );
       }
-      const alternatives = glob
-        .slice(index + 1, end)
-        .split(",")
-        .map((alternative) =>
-          alternative.replaceAll(/[|\\{}()[\]^$+?.]/gu, "\\$&")
-        );
-      pattern += `(?:${alternatives.join("|")})`;
-      index = end;
+      pattern += `(?:${alternatives.map(globFragment).join("|")})`;
+      index = end - 1;
     } else if (char === "}") {
       throw new UltraciteSetupError(`Invalid Ultracite config glob "${glob}".`);
     } else if (char === "*" && glob[index + 1] === "*") {
@@ -92,14 +108,36 @@ const globToRegExp = (glob: string): RegExp => {
           `Invalid Ultracite config glob "${glob}".`
         );
       }
-      pattern += glob.slice(index, end + 1);
+      const contents = glob.slice(index + 1, end);
+      const negated = contents.startsWith("!");
+      const characterClass = negated ? contents.slice(1) : contents;
+      if (!characterClass) {
+        throw new UltraciteSetupError(
+          `Invalid Ultracite config glob "${glob}".`
+        );
+      }
+      pattern += `(?:(?!/)[${negated ? "^" : ""}${characterClass}])`;
       index = end;
     } else {
-      pattern += char.replaceAll(/[|\\()[\]^$+]/gu, "\\$&");
+      pattern += char.replaceAll(/[|\\()[\]{}^$+?.]/gu, "\\$&");
     }
   }
+  return pattern;
+};
+
+const globToRegExp = (glob: string): RegExp => {
+  if (
+    !glob ||
+    path.isAbsolute(glob) ||
+    path.win32.isAbsolute(glob) ||
+    glob.split(/[\\/]/u).includes("..")
+  ) {
+    throw new UltraciteSetupError(
+      `Invalid Ultracite config glob "${glob}". Use a non-empty project-relative pattern without "..".`
+    );
+  }
   try {
-    return new RegExp(`${pattern}$`, "u");
+    return new RegExp(`^${globFragment(glob)}$`, "u");
   } catch (error) {
     throw new UltraciteSetupError(
       `Invalid Ultracite config glob "${glob}": ${error instanceof Error ? error.message : String(error)}`
@@ -111,70 +149,44 @@ const validateGlob = (glob: string): void => {
   globToRegExp(glob);
 };
 
-const discoverConfigs = async (root: string): Promise<string[]> => {
-  const found: string[] = [];
-  const visit = async (directory: string): Promise<void> => {
-    let entries;
-    try {
-      entries = await readdirAsync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    const workspaceRoot =
-      directory === root ||
-      entries.some((entry) => entry.name === "package.json");
-    await Promise.all(
-      entries.map(async (entry) => {
-        if (entry.isDirectory()) {
-          if (!discoverySafetyExclusions.has(entry.name)) {
-            await visit(path.join(directory, entry.name));
-          }
-        } else if (entry.name === configFileName && workspaceRoot) {
-          found.push(path.join(directory, entry.name));
-        }
-      })
-    );
-  };
-  await visit(root);
-  return found.toSorted((left, right) => left.localeCompare(right));
-};
-
-/** Find path configs without invoking async loading so no-config CLI calls stay synchronous. */
+/** Find path configs only at the project root and declared workspace roots. */
 export const findPathConfigFiles = (root: string): string[] => {
+  const projectRoot = path.resolve(root);
+  const workspaceLocations = (findWorkspaces(projectRoot) ?? [])
+    .map(({ location }) => path.resolve(location))
+    .filter((location) => {
+      const relative = path.relative(projectRoot, location);
+      return (
+        relative === "" ||
+        (!relative.startsWith(`..${path.sep}`) && relative !== "..")
+      );
+    });
+  const candidates = new Set([projectRoot, ...workspaceLocations]);
   const found: string[] = [];
-  const visit = (directory: string): void => {
+  for (const directory of candidates) {
     let entries;
     try {
-      entries = readdirSync(directory, { withFileTypes: true });
+      entries = readdirSync(directory);
     } catch {
-      return;
+      continue;
     }
-    const workspaceRoot =
-      path.resolve(directory) === path.resolve(root) ||
-      entries.some((entry) => entry.name === "package.json");
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        if (!discoverySafetyExclusions.has(entry.name)) {
-          visit(path.join(directory, entry.name));
-        }
-      } else if (entry.name === configFileName && workspaceRoot) {
-        found.push(path.join(directory, entry.name));
-      }
+    if (entries.includes(configFileName)) {
+      found.push(path.join(directory, configFileName));
     }
-  };
-  visit(path.resolve(root));
+  }
   return found.toSorted((left, right) => left.localeCompare(right));
 };
 
 const loadConfig = async (configPath: string): Promise<UltraciteConfig> => {
   let module: { default?: unknown };
   try {
-    module = await import(pathToFileURL(configPath).href);
+    module = await createJiti(pathToFileURL(configPath).href).import(
+      configPath
+    );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new UltraciteSetupError(
-      `Could not load ${configPath}: ${detail}. Ensure it is a valid Node.js ESM config.`
+      `Could not load ${configPath}: ${detail}. Ensure it is a valid TypeScript config.`
     );
   }
 
@@ -201,7 +213,7 @@ export const resolvePathConfig = async (
   configs?: string[]
 ): Promise<ResolvedPathConfig | null> => {
   const root = path.resolve(projectRoot);
-  const found = (configs ?? (await discoverConfigs(root)))
+  const found = (configs ?? findPathConfigFiles(root))
     .map((file) => path.resolve(file))
     .toSorted(
       (left, right) =>
@@ -222,10 +234,10 @@ export const resolvePathConfig = async (
 
   const configPaths = new Set(found);
   const cache = new Map<string, UltraciteConfig>();
+  const resolvedScopes = new Map<string, PresetScope[]>();
   const scopes: PresetScope[] = [];
   const active: string[] = [];
-  const resolved = new Set<string>();
-  const resolveFile = async (file: string): Promise<void> => {
+  const resolveFile = async (file: string): Promise<PresetScope[]> => {
     if (active.includes(file)) {
       const cycle = [...active.slice(active.indexOf(file)), file]
         .map((entry) => path.relative(root, entry))
@@ -234,8 +246,9 @@ export const resolvePathConfig = async (
         `Circular Ultracite config inheritance: ${cycle}`
       );
     }
-    if (resolved.has(file)) {
-      return;
+    const cachedScopes = resolvedScopes.get(file);
+    if (cachedScopes) {
+      return cachedScopes;
     }
     active.push(file);
     let config = cache.get(file);
@@ -244,6 +257,7 @@ export const resolvePathConfig = async (
       cache.set(file, config);
     }
     const directory = path.dirname(file);
+    const inheritedScopes: PresetScope[] = [];
     for (const parent of config.extends ?? []) {
       if (parent.startsWith("ultracite/")) {
         const preset = parent.slice("ultracite/".length);
@@ -252,7 +266,11 @@ export const resolvePathConfig = async (
             `Unknown Ultracite preset "${parent}".`
           );
         }
-        scopes.push({ directory, files: ["**/*"], presets: [preset] });
+        inheritedScopes.push({
+          directory,
+          files: ["**/*"],
+          presets: [preset],
+        });
         continue;
       }
       if (!parent.startsWith(".")) {
@@ -268,7 +286,29 @@ export const resolvePathConfig = async (
       }
       // Parent configs must be resolved before child scopes for stable merging.
       // oxlint-disable-next-line no-await-in-loop
-      await resolveFile(parentPath);
+      const parentScopes = await resolveFile(parentPath);
+      for (const parentScope of parentScopes) {
+        const relativeScopeDirectory = toPosix(
+          path.relative(parentScope.directory, directory)
+        );
+        const files = parentScope.files.flatMap((glob) => {
+          if (glob === "**/*" || relativeScopeDirectory === "") {
+            return [glob];
+          }
+          const prefix = `${relativeScopeDirectory}/`;
+          if (glob.startsWith(prefix)) {
+            return [glob.slice(prefix.length)];
+          }
+          return [];
+        });
+        if (files.length > 0) {
+          inheritedScopes.push({
+            directory,
+            files,
+            presets: parentScope.presets,
+          });
+        }
+      }
     }
     for (const override of config.overrides ?? []) {
       const files = Array.isArray(override.files)
@@ -289,17 +329,36 @@ export const resolvePathConfig = async (
             `Unknown Ultracite preset "${preset}".`
           );
         }
-        scopes.push({ directory, files, presets: [name] });
+        inheritedScopes.push({ directory, files, presets: [name] });
       }
     }
     active.pop();
-    resolved.add(file);
+    resolvedScopes.set(file, inheritedScopes);
+    return inheritedScopes;
   };
 
   for (const file of found) {
+    const configDirectory = path.dirname(file);
+    const childConfigDirectories = found
+      .map((entry) => path.dirname(entry))
+      .filter((directory) => {
+        const relative = path.relative(configDirectory, directory);
+        return (
+          relative !== "" &&
+          relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        );
+      });
     // Preserve ancestor-first ordering when scopes from multiple configs merge.
     // oxlint-disable-next-line no-await-in-loop
-    await resolveFile(file);
+    const configScopes = await resolveFile(file);
+    scopes.push(
+      ...configScopes.map((scope) => ({
+        ...scope,
+        excludedDirectories: childConfigDirectories,
+      }))
+    );
   }
   return { configFiles: found, projectRoot: root, scopes };
 };
@@ -315,6 +374,17 @@ export const matchesPresetScope = (
     relative.startsWith("../") ||
     relative === ".." ||
     path.isAbsolute(relative)
+  ) {
+    return false;
+  }
+  if (
+    scope.excludedDirectories?.some((directory) => {
+      const excludedRelative = toPosix(path.relative(directory, absoluteFile));
+      return (
+        excludedRelative === "" ||
+        (!excludedRelative.startsWith("../") && excludedRelative !== "..")
+      );
+    })
   ) {
     return false;
   }

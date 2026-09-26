@@ -23,9 +23,9 @@ The concept is the same across all supported linters — pull in the `core` pres
 
 ## Path-Scoped Configuration
 
-Use `ultracite.config.mjs` when framework presets should apply only to part of a repository. Import `defineConfig` from `ultracite/config`; it provides types for the shared preset DSL while Ultracite translates it into the selected provider's native config before each root `check` or `fix` run.
+Use `ultracite.config.ts` when framework presets should apply only to part of a repository. Import `defineConfig` from `ultracite/config` for type checking; Ultracite translates the shared preset DSL into the selected provider's native config before each root `check` or `fix` run.
 
-```js title="ultracite.config.mjs"
+```ts title="ultracite.config.ts"
 import { defineConfig } from "ultracite/config";
 
 export default defineConfig({

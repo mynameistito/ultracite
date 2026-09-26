@@ -1,21 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import { matchesPresetScope, resolvePathConfig } from "../src/path-config";
+import {
+  findPathConfigFiles,
+  matchesPresetScope,
+  resolvePathConfig,
+} from "../src/path-config";
 
 const fixture = path.join(import.meta.dir, "fixtures", "path-config");
 
 describe("path config", () => {
+  test("discovers the root TypeScript config", () => {
+    expect(findPathConfigFiles(fixture)).toEqual([
+      path.join(fixture, "ultracite.config.ts"),
+    ]);
+  });
+
   test("resolves root overrides and explicit workspace inheritance", async () => {
     const config = await resolvePathConfig(fixture, [
-      path.join(fixture, "ultracite.config.mjs"),
-      path.join(fixture, "apps", "web", "ultracite.config.mjs"),
+      path.join(fixture, "ultracite.config.ts"),
+      path.join(fixture, "apps", "web", "ultracite.config.ts"),
+      path.join(fixture, "isolated", "ultracite.config.ts"),
     ]);
 
     expect(config?.scopes.map((scope) => scope.presets)).toEqual([
+      ["react"],
       ["core"],
       ["react"],
       ["astro"],
+      ["core"],
+      ["react"],
       ["tanstack"],
     ]);
     expect(
@@ -27,6 +41,17 @@ describe("path config", () => {
             scope
           )
       )
+    ).toBe(true);
+    const isolated = path.join(fixture, "isolated", "src", "index.tsx");
+    expect(
+      config?.scopes
+        .filter((scope) => scope.presets.includes("astro"))
+        .some((scope) => matchesPresetScope(isolated, scope))
+    ).toBe(false);
+    expect(
+      config?.scopes
+        .filter((scope) => scope.presets.includes("react"))
+        .some((scope) => matchesPresetScope(isolated, scope))
     ).toBe(true);
   });
 
@@ -95,6 +120,25 @@ describe("path config", () => {
         path.join(fixture, "packages", "shared", "src", "bad-component.tsx"),
         scope
       )
+    ).toBe(false);
+
+    const extensions = {
+      ...scope,
+      files: ["src/{*.ts,*.tsx}"],
+    };
+    expect(
+      matchesPresetScope(path.join(fixture, "src", "component.tsx"), extensions)
+    ).toBe(true);
+    expect(
+      matchesPresetScope(path.join(fixture, "src", "component.js"), extensions)
+    ).toBe(false);
+
+    const negatedClass = { ...scope, files: ["src/[!a].ts"] };
+    expect(
+      matchesPresetScope(path.join(fixture, "src", "b.ts"), negatedClass)
+    ).toBe(true);
+    expect(
+      matchesPresetScope(path.join(fixture, "src", "a.ts"), negatedClass)
     ).toBe(false);
   });
 });

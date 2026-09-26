@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import deepmerge from "deepmerge";
 import fastGlob from "fast-glob";
+import { createJiti } from "jiti";
 import { parse } from "jsonc-parser";
 
 import { ignorePatterns } from "../config/shared/ignores.mjs";
@@ -45,7 +47,7 @@ const providerPresetPath = (linter: Linter, preset: string): string => {
   );
   if (!resolvedPath) {
     throw new UltraciteSetupError(
-      `Could not resolve the ${linter} preset "ultracite/${linter}/${preset}". Install Ultracite in this project and try again.`
+      `The preset "ultracite/${linter}/${preset}" is unavailable for the selected linter (${linter}).`
     );
   }
   return resolvedPath;
@@ -62,7 +64,23 @@ const existingNativeConfig = (linter: Linter): string | null => {
 
 const scopeGlobs = (scope: PresetScope, root: string): string[] => {
   const prefix = path.relative(root, scope.directory).split(path.sep).join("/");
-  return scope.files.map((file) => [prefix, file].filter(Boolean).join("/"));
+  return [
+    ...scope.files.map((file) => [prefix, file].filter(Boolean).join("/")),
+    ...(scope.excludedDirectories ?? []).map(
+      (directory) =>
+        `!${path.relative(root, directory).split(path.sep).join("/")}/**/*`
+    ),
+  ];
+};
+
+const isWithinDirectory = (directory: string, target: string): boolean => {
+  const relative = path.relative(directory, target);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
 };
 
 const scopeFiles = (scope: PresetScope, root: string): string[] => {
@@ -72,13 +90,20 @@ const scopeFiles = (scope: PresetScope, root: string): string[] => {
     onlyFiles: true,
   });
   const prefix = path.relative(root, scope.directory).split(path.sep).join("/");
-  return files.map((file) => [prefix, file].filter(Boolean).join("/"));
+  return files
+    .map((file) => path.resolve(scope.directory, file))
+    .filter(
+      (file) =>
+        !scope.excludedDirectories?.some((directory) =>
+          isWithinDirectory(directory, file)
+        )
+    )
+    .map((file) =>
+      [prefix, path.relative(scope.directory, file).split(path.sep).join("/")]
+        .filter(Boolean)
+        .join("/")
+    );
 };
-
-const oxlintScopeGlobs = (scope: PresetScope): string[] =>
-  scope.files.map((file) =>
-    path.resolve(scope.directory, file).split(path.sep).join("/")
-  );
 
 const matchesPresetFiles = (
   files: string[],
@@ -215,12 +240,38 @@ const createEslintConfig = async (
   const nativeImport = nativeConfig
     ? `import nativeConfig from ${JSON.stringify(pathToFileURL(nativeConfig).href)};\n`
     : "";
-  const body = `${nativeImport}${importLines}\n\nconst scopeConfig = (config, scopes) => config.flatMap((entry) => {\n  if (Object.keys(entry).every((key) => key === "ignores")) return [entry];\n  const patterns = entry.files ?? ["**/*"];\n  return [{ ...entry, files: scopes.flatMap((scope) => patterns.map((pattern) => [scope, pattern])) }];\n});\n\nexport default [${configs.join(",\n")}];\n`;
+  const body = `${nativeImport}${importLines}\n\nconst scopeConfig = (config, scopes) => config.flatMap((entry) => {\n  if (Object.keys(entry).every((key) => key === "ignores")) return [entry];\n  const patterns = entry.files ?? ["**/*"];\n  const includedScopes = scopes.filter((scope) => !scope.startsWith("!"));\n  const excludedScopes = scopes.filter((scope) => scope.startsWith("!")).map((scope) => scope.slice(1));\n  return [{ ...entry, files: [...includedScopes.flatMap((scope) => patterns.map((pattern) => [scope, pattern])), ...excludedScopes.map((scope) => "!" + scope)] }];\n});\n\nexport default [${configs.join(",\n")}];\n`;
   await writeProjectFile(eslintConfigPath, body);
   return eslintConfigPath;
 };
 
-const oxlintConfigPath = `${generatedDirectory}/oxlint.config.mjs`;
+const oxlintConfigPath = ".ultracite-oxlint.config.mjs";
+
+export const supportsNativeNodeTypeScriptConfig = (
+  version: string
+): boolean => {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return (
+    (major === 20 && minor >= 19) ||
+    (major === 22 && minor >= 18) ||
+    (major === 23 && minor >= 6) ||
+    major > 23
+  );
+};
+
+const nativeTypeScriptSupportedByRuntime = (): boolean =>
+  Boolean(process.versions.bun || process.versions.deno) ||
+  supportsNativeNodeTypeScriptConfig(process.versions.node);
+
+export const assertPathConfigPresetsAvailable = (
+  linter: Linter,
+  resolved: ResolvedPathConfig
+): void => {
+  const presets = new Set(resolved.scopes.flatMap((scope) => scope.presets));
+  for (const preset of presets) {
+    providerPresetPath(linter, preset);
+  }
+};
 
 const createOxlintConfig = async (
   resolved: ResolvedPathConfig
@@ -235,9 +286,21 @@ const createOxlintConfig = async (
       scope.files.includes("**/*")
   );
   const jsPlugins = new Map<string, unknown>();
+  const coreRuleNames = new Set<string>();
+  if (hasRootCore) {
+    const coreModule = await import(
+      pathToFileURL(providerPresetPath("oxlint", "core")).href
+    );
+    const coreConfig = coreModule.default as Record<string, unknown>;
+    if (coreConfig.rules && typeof coreConfig.rules === "object") {
+      for (const rule of Object.keys(coreConfig.rules)) {
+        coreRuleNames.add(rule);
+      }
+    }
+  }
   let settings: Record<string, unknown> = {};
   for (const scope of resolved.scopes) {
-    const files = oxlintScopeGlobs(scope);
+    const files = scopeFiles(scope, resolved.projectRoot);
     for (const preset of scope.presets) {
       if (preset === "core" && hasRootCore) {
         continue;
@@ -330,8 +393,18 @@ const createOxlintConfig = async (
         await readFile(nativeConfig, "utf-8")
       ) as Record<string, unknown>;
     } else {
+      if (
+        path.extname(nativeConfig) === ".ts" &&
+        !nativeTypeScriptSupportedByRuntime()
+      ) {
+        throw new UltraciteSetupError(
+          `The native Oxlint TypeScript config at ${nativeConfig} requires Node.js >=20.19.0 or >=22.18.0 (or Bun/Deno) because Oxlint loads the generated config natively.`
+        );
+      }
       nativeConfigImport = `import nativeConfig from ${JSON.stringify(pathToFileURL(nativeConfig).href)};\n`;
-      const nativeModule = await import(pathToFileURL(nativeConfig).href);
+      const nativeModule = await createJiti(
+        pathToFileURL(nativeConfig).href
+      ).import<{ default?: unknown }>(nativeConfig);
       if (!nativeModule.default || typeof nativeModule.default !== "object") {
         throw new UltraciteSetupError(
           `The Oxlint config at ${nativeConfig} must export a configuration object.`
@@ -347,7 +420,7 @@ const createOxlintConfig = async (
   const nativeRuleNames = new Set(Object.keys(nativeRules));
   const effectiveRulesOff = Object.fromEntries(
     Object.entries(scopedRulesOff).filter(
-      ([rule]) => !nativeRuleNames.has(rule)
+      ([rule]) => !nativeRuleNames.has(rule) && !coreRuleNames.has(rule)
     )
   );
   if (Object.keys(effectiveRulesOff).length > 0) {

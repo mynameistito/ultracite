@@ -928,6 +928,7 @@ export const initialize = async (flags?: InitializeFlags) => {
         !framework ||
         extra ||
         path.isAbsolute(workspace) ||
+        path.win32.isAbsolute(workspace) ||
         workspace.split(/[\\/]/u).includes("..")
       ) {
         throw new Error(
@@ -949,9 +950,9 @@ export const initialize = async (flags?: InitializeFlags) => {
       };
     }
   );
-  if (workspaceFrameworks.length > 0 && exists("./ultracite.config.mjs")) {
+  if (workspaceFrameworks.length > 0 && exists("./ultracite.config.ts")) {
     throw new Error(
-      "ultracite.config.mjs already exists. Add the workspace overrides to it instead of replacing the existing config."
+      "ultracite.config.ts already exists. Add the workspace overrides to it instead of replacing the existing config."
     );
   }
 
@@ -1286,7 +1287,7 @@ export const initialize = async (flags?: InitializeFlags) => {
 
     if (workspaceFrameworks.length > 0) {
       await writeProjectFile(
-        "./ultracite.config.mjs",
+        "./ultracite.config.ts",
         createPathConfigSource(workspaceFrameworks, frameworks)
       );
     }

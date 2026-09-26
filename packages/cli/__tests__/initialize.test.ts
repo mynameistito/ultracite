@@ -94,6 +94,9 @@ describe("initialize", () => {
       initialize({ workspaceFrameworks: ["../outside=react"] })
     ).rejects.toThrow("Invalid --workspace-framework");
     await expect(
+      initialize({ workspaceFrameworks: ["C:\\outside=react"] })
+    ).rejects.toThrow("Invalid --workspace-framework");
+    await expect(
       initialize({ workspaceFrameworks: ["apps/web=unknown"] })
     ).rejects.toThrow("Unsupported framework");
     await expect(
