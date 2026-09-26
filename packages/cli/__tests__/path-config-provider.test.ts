@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -85,32 +84,24 @@ describe("path-scoped provider configs", () => {
     );
   });
 
-  test("Oxlint keeps its native TypeScript config alongside Ultracite path config", async () => {
-    const generatedConfig = path.join(
-      nativeOxlintFixture,
-      ".ultracite-oxlint.config.mjs"
+  test("Oxlint keeps its native TypeScript config alongside Ultracite path config", () => {
+    const materialize = Bun.spawnSync(
+      [
+        process.execPath,
+        "-e",
+        `import { readFileSync, rmSync } from "node:fs"; import path from "node:path"; import { resolvePathConfig } from ${JSON.stringify(cliEntry)}; import { materializePathConfig } from ${JSON.stringify(adapterEntry)}; const root = process.cwd(); const output = path.join(root, ".ultracite-oxlint.config.mjs"); try { const config = await resolvePathConfig(root, [path.join(root, "ultracite.config.ts")]); await materializePathConfig("oxlint", config); console.log(readFileSync(output, "utf-8")); } finally { rmSync(output, { force: true }); }`,
+      ],
+      { cwd: nativeOxlintFixture }
     );
-    try {
-      const materialize = Bun.spawnSync(
-        [
-          process.execPath,
-          "-e",
-          `import path from "node:path"; import { resolvePathConfig } from ${JSON.stringify(cliEntry)}; import { materializePathConfig } from ${JSON.stringify(adapterEntry)}; const root = process.cwd(); const config = await resolvePathConfig(root, [path.join(root, "ultracite.config.ts")]); await materializePathConfig("oxlint", config);`,
-        ],
-        { cwd: nativeOxlintFixture }
-      );
-      if (materialize.exitCode !== 0) {
-        throw new Error(materialize.stderr.toString());
-      }
-      const oxlintConfig = await Bun.file(generatedConfig).text();
-      expect(oxlintConfig).toContain("oxlint.config.ts");
-      expect(oxlintConfig).toContain('"no-console":"error"');
-      expect(oxlintConfig).toContain('"react"');
-      expect(oxlintConfig).toContain('"native-generated/**"');
-      expect(oxlintConfig).toContain('"packages/shared/src/**/*.ts"');
-    } finally {
-      await rm(generatedConfig, { force: true });
+    if (materialize.exitCode !== 0) {
+      throw new Error(materialize.stderr.toString());
     }
+    const oxlintConfig = materialize.stdout.toString();
+    expect(oxlintConfig).toContain("oxlint.config.ts");
+    expect(oxlintConfig).toContain('"no-console":"error"');
+    expect(oxlintConfig).toContain('"react"');
+    expect(oxlintConfig).toContain('"native-generated/**"');
+    expect(oxlintConfig).toContain('"packages/shared/src/**/*.ts"');
   });
 
   test("root check and fix materialize the shared DSL for explicit cross-scope files", () => {
@@ -118,7 +109,7 @@ describe("path-scoped provider configs", () => {
       [
         process.execPath,
         "-e",
-        `import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"; import { spawnSync } from "node:child_process"; import path from "node:path"; const root = process.cwd(); const files = [path.join(root, "apps/web/package.json"), path.join(root, ".oxlintrc.json"), path.join(root, "apps/web/src/clean.ts"), path.join(root, "packages/shared/src/clean.ts"), path.join(root, ".ultracite-oxlint.config.mjs")]; const originals = new Map(files.map((file) => [file, existsSync(file) ? readFileSync(file) : undefined])); try { const [manifest, nativeConfig, webFile, sharedFile] = files; writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); writeFileSync(manifest, "{}\\n"); writeFileSync(webFile, "export const clean = 1;\\n"); writeFileSync(sharedFile, "export const clean = 1;\\n"); const cli = ${JSON.stringify(path.join(cliRoot, "src", "index.ts"))}; const env = { ...process.env, PATH: ${JSON.stringify(path.join(cliRoot, "node_modules", ".bin"))} + path.delimiter + process.env.PATH }; const check = spawnSync(process.execPath, [cli, "check", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); const fix = spawnSync(process.execPath, [cli, "fix", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); console.log(JSON.stringify({ checkStatus: check.status, checkOutput: check.stdout + check.stderr, fixStatus: fix.status, fixOutput: fix.stdout + fix.stderr })); } finally { for (const [file, contents] of originals) { if (contents === undefined) rmSync(file, { force: true }); else writeFileSync(file, contents); } }`,
+        `import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"; import { spawnSync } from "node:child_process"; import path from "node:path"; const root = process.cwd(); const files = [path.join(root, "apps/web/package.json"), path.join(root, ".oxlintrc.json"), path.join(root, "apps/web/src/clean.ts"), path.join(root, "packages/shared/src/clean.ts"), path.join(root, ".ultracite-oxlint.config.mjs")]; const originals = new Map(files.map((file) => [file, existsSync(file) ? readFileSync(file) : undefined])); try { const [manifest, nativeConfig, webFile, sharedFile] = files; writeFileSync(nativeConfig, JSON.stringify({ rules: { "no-alert": "error" } })); writeFileSync(manifest, "{}\\n"); writeFileSync(webFile, "export const clean = 1;\\n"); writeFileSync(sharedFile, "export const clean = 1;\\n"); const cli = ${JSON.stringify(path.join(cliRoot, "src", "index.ts"))}; const env = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, "--experimental-strip-types"].filter(Boolean).join(" "), PATH: ${JSON.stringify(path.join(cliRoot, "node_modules", ".bin"))} + path.delimiter + process.env.PATH }; const check = spawnSync(process.execPath, [cli, "check", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); const fix = spawnSync(process.execPath, [cli, "fix", "--format=unix", "apps/web/src/clean.ts", "packages/shared/src/clean.ts"], { cwd: root, encoding: "utf-8", env }); console.log(JSON.stringify({ checkStatus: check.status, checkOutput: check.stdout + check.stderr, fixStatus: fix.status, fixOutput: fix.stdout + fix.stderr })); } finally { for (const [file, contents] of originals) { if (contents === undefined) rmSync(file, { force: true }); else writeFileSync(file, contents); } }`,
       ],
       { cwd: fixture }
     );
